@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -8,13 +9,15 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/PuerkitoBio/goquery"
 )
 
 func main() {
 	url := "https://www.off.niihama-nct.ac.jp/gakuryo-a/kondate/"
-	filepath := "html/ryoushoku.html"
+	nowMonth := getNowManth()
+	filepath := "html/ryoushoku" + nowMonth + ".html"
 	fileInfos, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		log.Println("Downloading Domitory Meal HTML File...")
@@ -23,12 +26,34 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-
-	pdfUrl, err := getPDFUrl(&fileInfos, url)
+	PDFFilePath, err := getPDFFilePath(&fileInfos)
 	if err != nil {
 		log.Fatalln(err)
 	}
-	fmt.Println(pdfUrl)
+
+	first := true
+	for _, PDFPath := range PDFFilePath {
+		PDFUrl, isUrl := makeFullPath(url, PDFPath)
+		if isUrl {
+			continue
+		}
+		direcoryName, err := getDirecotry(PDFPath)
+		if err != nil {
+
+		}
+		if first {
+			first = false
+			err = makeDirecoty("PDF/" + direcoryName)
+			if err != nil {
+				log.Fatalln(err)
+			}
+		}
+		//TODO: PDFファイルがすでに存在する場合を除外する
+		err = DownloadFile("PDF/"+PDFPath, PDFUrl)
+		if err != nil {
+			log.Fatalln(err)
+		}
+	}
 
 }
 
@@ -58,21 +83,43 @@ func makeFullPath(url string, path string) (string, bool) {
 	}
 }
 
-func getPDFUrl(readedFileByte *[]byte, url string) (*[]string, error) {
-	stringReader := strings.NewReader(string(*readedFileByte))
-	doc, err := goquery.NewDocumentFromReader(stringReader)
+func getPDFFilePath(readedFile *[]byte) ([]string, error) {
+	if len(*readedFile) == 0 {
+		return nil, fmt.Errorf("readedFile is empty")
+	}
+	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(*readedFile))
 	if err != nil {
 		return nil, err
 	}
 	var links []string
-	doc.Find("tbody > tr").Each(func(i int, s *goquery.Selection) {
-		href, _ := s.Find("a").Attr("href")
-		href = string([]rune(href))
-		url, isUrl := makeFullPath(url, href)
-		fmt.Println(isUrl)
-		if len(href) > 0 && !isUrl {
-			links = append(links, url)
+	doc.Find("tbody > tr").Each(func(_ int, row *goquery.Selection) {
+		path, exists := row.Find("a").Attr("href")
+		if !exists {
+			return
+		}
+		if len(path) > 0 {
+			links = append(links, path)
 		}
 	})
-	return &links, nil
+	return links, nil
+}
+
+func getNowManth() string {
+	return time.Now().Month().String()
+}
+
+func getDirecotry(filePath string) (string, error) {
+	parts := strings.Split(filePath, "/")
+	if len(parts) == 0 {
+		return "", fmt.Errorf("cannot get directory")
+	}
+	return parts[0], nil
+}
+
+func makeDirecoty(direcoryName string) error {
+	err := os.MkdirAll(direcoryName, 0755)
+	if err != nil {
+		return err
+	}
+	return nil
 }
