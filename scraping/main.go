@@ -26,29 +26,33 @@ func main() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	PDFFilePath, err := getPDFFilePath(&fileInfos)
+	remotePDFFilePath, err := getPDFFilePath(&fileInfos)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
+	// Download PDF Files to ./PDF
 	first := true
-	for _, PDFPath := range PDFFilePath {
-		PDFUrl, isUrl := makeFullPath(url, PDFPath)
+	var localPDFFilePath []string
+	PDFRoot := "PDF/"
+	for _, remotePDFPath := range remotePDFFilePath {
+		PDFUrl, isUrl := makeFullPath(url, remotePDFPath)
 		if isUrl {
 			continue
 		}
-		direcoryName, err := getDirecotry(PDFPath)
+		direcoryName, err := getDirecotry(remotePDFPath)
+		localPDFFilePath = append(localPDFFilePath, PDFRoot+remotePDFPath)
 		if err != nil {
-
+			log.Fatalln(err)
 		}
 		if first {
 			first = false
-			err = makeDirecoty("PDF/" + direcoryName)
+			err = makeDirecoty(PDFRoot + direcoryName)
 			if err != nil {
 				log.Fatalln(err)
 			}
 		}
-		err = DownloadFile("PDF/"+PDFPath, PDFUrl)
+		err = DownloadFile(PDFRoot+remotePDFPath, PDFUrl)
 		if err != nil {
 			log.Fatalln(err)
 		}
@@ -56,9 +60,13 @@ func main() {
 	}
 
 	//TODO: これをここで使えるようにする
-	err = extractPDF(PDFFilePath)
-	if err != nil {
-		log.Fatalln(err)
+	if len(localPDFFilePath) == 0 {
+		log.Fatalln("PDFFilePath is empty")
+	} else {
+		err = extractPDF(localPDFFilePath)
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
 
 }

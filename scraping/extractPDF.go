@@ -25,6 +25,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 
 	"github.com/bmatcuk/doublestar"
+	"github.com/joho/godotenv"
 	"github.com/unidoc/unipdf/v3/common"
 	"github.com/unidoc/unipdf/v3/common/license"
 	"github.com/unidoc/unipdf/v3/extractor"
@@ -35,56 +36,112 @@ import (
 func init() {
 	// Make sure to load your metered License API key prior to using the library.
 	// If you need a key, you can sign up and create a free one at https://cloud.unidoc.io
-	err := license.SetMeteredKey(os.Getenv(`UNIDOC_LICENSE_API_KEY`))
+	err := godotenv.Load()
+	if err != nil {
+		panic("Error loading .env file")
+	}
+	apiKey := os.Getenv("UNIDOC_LICENSE_API_KEY")
+	err = license.SetMeteredKey(apiKey)
 	if err != nil {
 		panic(err)
 	}
 }
 
-const (
-	usage = "Usage: go run pdf_tables.go [options] <file1.pdf> <file2.pdf> ...\n"
-)
+type Options struct {
+	CSVDir    string
+	FirstPage int
+	LastPage  int
+	Width     int
+	Height    int
+	Verbose   int
+	Debug     bool
+	Trace     bool
+	DoProfile bool
+}
 
-func extractPDF(PDFFilePath []string) error {
-	var (
-		firstPage, lastPage     int
-		width, height           int
-		csvDir                  string
-		debug, trace, doProfile bool
-		verbose                 int
-	)
-	flag.StringVar(&csvDir, "o", "./outcsv", `Output CSVs (default outtext). Set to "" to not save.`)
-	flag.IntVar(&firstPage, "f", -1, "First page.")
-	flag.IntVar(&lastPage, "l", 100000, "Last page.")
-	flag.IntVar(&width, "w", 0, "Minimum table width.")
-	flag.IntVar(&height, "h", 0, "Minimum table height.")
-	flag.IntVar(&verbose, "v", 1, `Verbosity level
-    <empty>                (level 0)
-    N pages M tables       (level 1) default
-    page I: M tables       (level 2)
-      table J: W x H       (level 3)
-         table content     (level 4)
-	`)
-	flag.BoolVar(&debug, "d", false, "Print debugging information.")
-	flag.BoolVar(&trace, "e", false, "Print detailed debugging information.")
-	flag.BoolVar(&doProfile, "p", false, "Save profiling information.")
-	makeUsage(usage)
-	flag.Parse()
-	args := flag.Args()
-	if len(args) < 1 {
-		flag.Usage()
-		os.Exit(1)
+type Option func(*Options)
+
+func csvDir(dir string) Option {
+	return func(opts *Options) {
+		opts.CSVDir = dir
+	}
+}
+
+func FirstPage(page int) Option {
+	return func(opts *Options) {
+		opts.FirstPage = page
+	}
+}
+
+func LastPage(page int) Option {
+	return func(opts *Options) {
+		opts.LastPage = page
+	}
+}
+
+func Width(width int) Option {
+	return func(opts *Options) {
+		opts.Width = width
+	}
+}
+
+func Height(height int) Option {
+	return func(opts *Options) {
+		opts.Height = height
+	}
+}
+
+func Verbose(verbose int) Option {
+	return func(opts *Options) {
+		opts.Verbose = verbose
+	}
+}
+
+func Debug(debug bool) Option {
+	return func(opts *Options) {
+		opts.Debug = debug
+	}
+}
+
+func Trace(trace bool) Option {
+	return func(opts *Options) {
+		opts.Trace = trace
+	}
+}
+
+func DoProfile(doProfile bool) Option {
+	return func(opts *Options) {
+		opts.DoProfile = doProfile
+	}
+}
+
+func extractPDF(PDFFilePath []string, options ...Option) error {
+	// Default Options
+	opts := Options{
+		CSVDir:    "./outcsv",
+		FirstPage: -1,
+		LastPage:  10000,
+		Width:     0,
+		Height:    0,
+		Verbose:   1,
+		Debug:     false,
+		Trace:     false,
+		DoProfile: false,
 	}
 
-	if trace {
+	for _, option := range options {
+		option(&opts)
+	}
+
+	if opts.Trace {
 		common.SetLogger(common.NewConsoleLogger(common.LogLevelTrace))
-	} else if debug {
+	} else if opts.Debug {
 		common.SetLogger(common.NewConsoleLogger(common.LogLevelDebug))
 	} else {
 		common.SetLogger(common.NewConsoleLogger(common.LogLevelInfo))
 	}
 
-	makeDir("CSV directory", csvDir)
+	makeDir("CSV directory", opts.CSVDir)
 
 	pathList, err := patternsToPaths(PDFFilePath)
 	if err != nil {
@@ -92,7 +149,7 @@ func extractPDF(PDFFilePath []string) error {
 	}
 	fmt.Printf("%d PDF files\n", len(pathList))
 
-	if doProfile {
+	if opts.DoProfile {
 		f, err := os.Create("cpu.profile")
 		if err != nil {
 			return fmt.Errorf("could not create CPU profile: err=%w", err)
@@ -106,17 +163,25 @@ func extractPDF(PDFFilePath []string) error {
 
 	for i, inPath := range pathList {
 		t0 := time.Now()
-		result, err := extractTables(inPath, firstPage, lastPage)
+		result, err := extractTables(inPath, opts.FirstPage, opts.LastPage)
 		if err != nil {
 			log.Fatalf("Error: %v\n", err)
 			continue
 		}
 		duration := time.Since(t0).Seconds()
 		numPages := len(result.pageTables)
-		result = result.filter(width, height)
+		result = result.filter(opts.Width, opts.Height)
 		log.Printf("%3d of %d: %4.1f MB %3d pages %4.1f sec %q %s",
-			i+1, len(pathList), fileSizeMB(inPath), numPages, duration, inPath, result.describe(verbose))
-		csvRoot := changeDirExt(csvDir, filepath.Base(inPath), "", "")
+			i+1, len(pathList), fileSizeMB(inPath), numPages, duration, inPath, result.describe(opts.Verbose))
+		csvYearDirName, err := extractDirectory(inPath, 1)
+		csvMonthDirName, err := extractDirectory(inPath, -1)
+		if err != nil {
+			log.Fatalf("Failed to extract directory: %v\n", err)
+		}
+		csvSubDir := opts.CSVDir + "/" + csvYearDirName + "/" + csvMonthDirName
+		makeDir("CSV Sub directory", csvSubDir)
+		csvRoot := changeDirExt(csvSubDir, filepath.Base(inPath), "", "")
+		fmt.Println(csvRoot)
 		if err := result.saveCSVFiles(csvRoot); err != nil {
 			log.Fatalf("Failed to write %q: %v\n", csvRoot, err)
 			continue
@@ -439,7 +504,7 @@ func makeDir(name, outDir string) {
 	if err != nil {
 		panic(fmt.Errorf("Abs failed. %s=%q err=%w", name, outDir, err))
 	}
-	if err := os.MkdirAll(outDir, 0777); err != nil {
+	if err := os.MkdirAll(outDir, 0751); err != nil {
 		panic(fmt.Errorf("Couldn't create %s=%q err=%w", name, outDir, err))
 	}
 }
@@ -460,4 +525,18 @@ func changeDirExt(dirName, filename, qualifier, extName string) string {
 	path := filepath.Join(dirName, filename)
 	common.Log.Debug("changeDirExt(%q,%q,%q)->%q", dirName, base, extName, path)
 	return path
+}
+
+func extractDirectory(filepath string, depth int) (string, error) {
+	parts := strings.Split(filepath, "/")
+	if len(parts) == 0 {
+		return "", fmt.Errorf("cannot get directory")
+	}
+	if depth == -1 {
+		fileName := parts[len(parts)-1]
+		dirName := strings.Split(fileName, ".")[0]
+		return dirName, nil
+	} else {
+		return strings.Split(parts[depth], ".")[0], nil
+	}
 }
