@@ -48,16 +48,27 @@ func main() {
 				log.Fatalln(err)
 			}
 		}
-		//TODO: PDFファイルがすでに存在する場合を除外する
 		err = DownloadFile("PDF/"+PDFPath, PDFUrl)
 		if err != nil {
 			log.Fatalln(err)
 		}
+
+	}
+
+	//TODO: これをここで使えるようにする
+	err = extractPDF(PDFFilePath)
+	if err != nil {
+		log.Fatalln(err)
 	}
 
 }
 
 func DownloadFile(filepath string, url string) error {
+	// Check if file already exists
+	if _, err := os.Stat(filepath); !os.IsNotExist(err) {
+		log.Println(filepath + ": already exists")
+		return nil
+	}
 
 	resp, err := http.Get(url)
 	if err != nil {
